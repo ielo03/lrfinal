@@ -84,9 +84,6 @@ def process_slice_to_df(file_path, df=None):
         slice_df['duration_ms'] / slice_df['num_tracks'], downcast='float'
     )
 
-    # Drop redundant features
-    slice_df = slice_df.drop(columns=['duration_ms', 'num_tracks', 'num_albums'])
-
     # If no DataFrame is provided, initialize one with the slice data
     if df is None:
         df = slice_df
@@ -96,12 +93,9 @@ def process_slice_to_df(file_path, df=None):
 
     return df
 
-import math
-
 def extract_features(df, song_counts, total_songs, top_n=100, decay_rate=0.1):
     """
-    Adds features to the playlist Dat aFrame based on track-level data,
-    with weights based on song frequency relative to the total number of songs.
+    Adds specific features to the playlist DataFrame based on track-level data.
 
     Args:
         df (pd.DataFrame): DataFrame with playlist data.
@@ -111,17 +105,16 @@ def extract_features(df, song_counts, total_songs, top_n=100, decay_rate=0.1):
         decay_rate (float): Decay rate for exponential weighting based on relative frequency (default: 0.1).
 
     Returns:
-        pd.DataFrame: Updated DataFrame with additional features.
+        pd.DataFrame: Updated DataFrame with the required features.
     """
+    import math
+
     # Precompute top N songs and artists
     top_songs = {song for song, _ in song_counts.most_common(top_n)}
     top_artists = {track.split(" by ")[-1] for track, _ in song_counts.most_common(top_n)}
 
     # Precompute exponential weights based on relative frequency
-    weights = {}
-    for song, count in song_counts.items():
-        relative_frequency = count / total_songs  # Frequency as a percentage of total songs
-        weights[song] = math.exp(-relative_frequency / decay_rate)
+    weights = {song: math.exp(-count / total_songs / decay_rate) for song, count in song_counts.items()}
 
     # Helper functions
     def calculate_popularity_score(tracks):
@@ -136,25 +129,28 @@ def extract_features(df, song_counts, total_songs, top_n=100, decay_rate=0.1):
         """Count the number of tracks by top N artists in the playlist."""
         return sum(1 for track in tracks if track.split(" by ")[-1] in top_artists)
 
-    def calculate_diversity_score(tracks):
-        """Count unique songs in the playlist."""
-        return len(set(tracks))
-
-    def calculate_rarity_score(tracks):
-        """Sum rarity scores, inversely proportional to song frequency."""
-        return sum(1 - (song_counts.get(track, 0) / total_songs) for track in tracks)
-
-    def unique_artists_count(tracks):
-        """Count unique artists in the playlist."""
-        return len(set(track.split(" by ")[-1] for track in tracks))
-
     # Apply feature calculations
-    df['popularity_score'] = df['tracks'].apply(calculate_popularity_score)
-    df['avg_song_popularity'] = df['popularity_score'] / df['tracks'].apply(len)
-    df['top_songs_count'] = df['tracks'].apply(count_top_songs)
-    df['top_artists_count'] = df['tracks'].apply(count_top_artists)
-    df['diversity_score'] = df['tracks'].apply(calculate_diversity_score)
-    df['rarity_score'] = df['tracks'].apply(calculate_rarity_score)
-    df['unique_artists'] = df['tracks'].apply(unique_artists_count)
+    df['popularity_score'] = df['tracks'].apply(calculate_popularity_score).astype('float64')
+    df['top_songs_count'] = df['tracks'].apply(count_top_songs).astype('float64')
+    df['top_artists_count'] = df['tracks'].apply(count_top_artists).astype('float64')
+
+    # Compute derived features
+    df['avg_albums_per_artist'] = (df['num_albums'] / df['num_artists']).astype('float64')
+    df['avg_song_popularity'] = (df['popularity_score'] / df['tracks'].apply(len)).astype('float64')
+
+    # Retain only required columns
+    df = df[[
+        'num_edits',                # From raw dataset
+        'num_artists',              # From raw dataset
+        'popularity_score',         # Computed feature
+        'description',              # From raw dataset
+        'top_artists_count',        # Computed feature
+        'top_songs_count',          # Computed feature
+        'modified_at',              # From raw dataset
+        'avg_albums_per_artist',    # Computed feature
+        'collaborative',            # From raw dataset
+        'avg_song_popularity',      # Computed feature
+        'num_followers'             # Target variable
+    ]]
 
     return df
